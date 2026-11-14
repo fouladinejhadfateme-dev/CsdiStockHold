@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="StockHold.API/StockHold.API.csproj" />
+  <Project Path="StockHold.Application/StockHold.Application.csproj" />
+  <Project Path="StockHold.Domain/StockHold.Domain.csproj" />
+  <Project Path="StockHold.Infrastructure/StockHold.Infrastructure.csproj" />
+  <Project Path="StockHold.Tests/StockHold.Tests.csproj" />
+</Solution>
