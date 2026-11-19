@@ -1,18 +1,14 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿
+using Microsoft.EntityFrameworkCore;
 using StockHold.Domain.Entities;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace StockHold.Infrastructure.Persistence.Contexts
 {
-    public class StockHoldDbContext:DbContext
+    public class StockHoldDbContext : DbContext
     {
         public StockHoldDbContext(
-        DbContextOptions<StockHoldDbContext> options)
-        : base(options)
+            DbContextOptions<StockHoldDbContext> options)
+            : base(options)
         {
         }
 
@@ -33,6 +29,13 @@ namespace StockHold.Infrastructure.Persistence.Contexts
                 entity.Property(p => p.Name)
                     .IsRequired()
                     .HasMaxLength(200);
+
+                entity.ToTable(table =>
+                {
+                    table.HasCheckConstraint(
+                        "CK_Products_StockQuantity",
+                        "[Quantity] >= 0");
+                });
             });
 
             modelBuilder.Entity<Customer>(entity =>
@@ -44,8 +47,14 @@ namespace StockHold.Infrastructure.Persistence.Contexts
                     .HasMaxLength(200);
 
                 entity.Property(c => c.CustomerType)
-                    .HasConversion<string>()
-                    .HasMaxLength(20);
+                    .IsRequired();
+
+                entity.ToTable(table =>
+                {
+                    table.HasCheckConstraint(
+                        "CK_Customers_CustomerType",
+                        "[CustomerType] IN (1, 2)");
+                });
             });
 
             modelBuilder.Entity<Reservation>(entity =>
@@ -65,14 +74,16 @@ namespace StockHold.Infrastructure.Persistence.Contexts
                     r.CustomerId,
                     r.IdempotencyKey
                 })
-                    .IsUnique();
+                    .IsUnique()
+                    .HasDatabaseName("UX_Reservations_Customer_IdempotencyKey");
 
                 entity.HasIndex(r => new
                 {
                     r.ProductId,
                     r.Status,
                     r.ExpiresAt
-                });
+                })
+                    .HasDatabaseName("IX_Reservations_Product_Status_ExpiresAt");
 
                 entity.HasOne<Customer>()
                     .WithMany()
@@ -83,6 +94,17 @@ namespace StockHold.Infrastructure.Persistence.Contexts
                     .WithMany()
                     .HasForeignKey(r => r.ProductId)
                     .OnDelete(DeleteBehavior.Restrict);
+
+                entity.ToTable(table =>
+                {
+                    table.HasCheckConstraint(
+                        "CK_Reservations_Quantity",
+                        "[Quantity] > 0");
+
+                    table.HasCheckConstraint(
+                        "CK_Reservations_Status",
+                        "[Status] IN ('Active', 'Expired', 'Cancelled')");
+                });
             });
         }
     }

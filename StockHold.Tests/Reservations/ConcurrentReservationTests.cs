@@ -1,16 +1,18 @@
-﻿
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using StockHold.Infrastructure.Persistence.Contexts;
 using StockHold.Tests.Factories;
 using Xunit;
-using System.Text.Json;
+
 namespace StockHold.Tests.Reservations;
 
 public class ConcurrentReservationTests
 {
+    private const int NormalCustomerType = 1;
+    private const int SpecialCustomerType = 2;
+
     private const string ConnectionString =
         "Server=DESKTOP-7DRGR3B;Database=StockHoldTestDb;Trusted_Connection=True;TrustServerCertificate=True;";
 
@@ -27,7 +29,7 @@ public class ConcurrentReservationTests
 
         await using (var db = new StockHoldDbContext(options))
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
 
             await db.Database.ExecuteSqlRawAsync("""
                 DELETE FROM dbo.Reservations;
@@ -38,25 +40,13 @@ public class ConcurrentReservationTests
                 DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
                 DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
 
-                IF NOT EXISTS
-                (
-                    SELECT 1
-                    FROM sys.indexes
-                    WHERE name = N'UX_Reservations_Customer_IdempotencyKey'
-                      AND object_id = OBJECT_ID(N'dbo.Reservations')
-                )
-                BEGIN
-                    CREATE UNIQUE INDEX UX_Reservations_Customer_IdempotencyKey
-                    ON dbo.Reservations (CustomerId, IdempotencyKey);
-                END;
-
                 INSERT INTO dbo.Products (Name, Quantity)
                 VALUES (N'Concurrent Test Product', 5);
 
                 INSERT INTO dbo.Customers (Name, CustomerType)
                 VALUES
-                    (N'Test Customer One', N'Special'),
-                    (N'Test Customer Two', N'Special');
+                    (N'Test Customer One', 2),
+                    (N'Test Customer Two', 2);
                 """);
 
             productId = await db.Products
@@ -163,7 +153,7 @@ public class ConcurrentReservationTests
 
         await using (var db = new StockHoldDbContext(options))
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
 
             await db.Database.ExecuteSqlRawAsync("""
                 DELETE FROM dbo.Reservations;
@@ -174,23 +164,11 @@ public class ConcurrentReservationTests
                 DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
                 DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
 
-                IF NOT EXISTS
-                (
-                    SELECT 1
-                    FROM sys.indexes
-                    WHERE name = N'UX_Reservations_Customer_IdempotencyKey'
-                      AND object_id = OBJECT_ID(N'dbo.Reservations')
-                )
-                BEGIN
-                    CREATE UNIQUE INDEX UX_Reservations_Customer_IdempotencyKey
-                    ON dbo.Reservations (CustomerId, IdempotencyKey);
-                END;
-
                 INSERT INTO dbo.Products (Name, Quantity)
                 VALUES (N'Idempotency Test Product', 5);
 
                 INSERT INTO dbo.Customers (Name, CustomerType)
-                VALUES (N'Idempotency Test Customer', N'Special');
+                VALUES (N'Idempotency Test Customer', 2);
                 """);
 
             productId = await db.Products
@@ -241,7 +219,6 @@ public class ConcurrentReservationTests
             $"Status: {secondResponse.StatusCode}\n" +
             $"Body: {secondResponseBody}");
 
-        // استخراج شناسه رزرو از هر دو پاسخ JSON
         using var firstJson = JsonDocument.Parse(firstResponseBody);
         using var secondJson = JsonDocument.Parse(secondResponseBody);
 
@@ -251,10 +228,8 @@ public class ConcurrentReservationTests
         var secondReservationId =
             secondJson.RootElement.GetProperty("id").GetInt32();
 
-        // هر دو پاسخ باید شناسه یکسان داشته باشند
         Assert.Equal(firstReservationId, secondReservationId);
 
-        // بررسی دیتابیس
         await using var verificationDb = new StockHoldDbContext(options);
 
         var reservations = await verificationDb.Reservations
@@ -287,23 +262,23 @@ public class ConcurrentReservationTests
 
         await using (var db = new StockHoldDbContext(options))
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
 
             await db.Database.ExecuteSqlRawAsync("""
-            DELETE FROM dbo.Reservations;
-            DELETE FROM dbo.Customers;
-            DELETE FROM dbo.Products;
+                DELETE FROM dbo.Reservations;
+                DELETE FROM dbo.Customers;
+                DELETE FROM dbo.Products;
 
-            DBCC CHECKIDENT ('dbo.Reservations', RESEED, 0);
-            DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
-            DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Reservations', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
 
-            INSERT INTO dbo.Products (Name, Quantity)
-            VALUES (N'Expiration Test Product', 5);
+                INSERT INTO dbo.Products (Name, Quantity)
+                VALUES (N'Expiration Test Product', 5);
 
-            INSERT INTO dbo.Customers (Name, CustomerType)
-            VALUES (N'Expiration Test Customer', N'Special');
-            """);
+                INSERT INTO dbo.Customers (Name, CustomerType)
+                VALUES (N'Expiration Test Customer', 2);
+                """);
 
             productId = await db.Products
                 .Where(p => p.Name == "Expiration Test Product")
@@ -319,7 +294,7 @@ public class ConcurrentReservationTests
         using var factory = new StockHoldApiFactory(ConnectionString);
         using var client = factory.CreateClient();
 
-        // 1. ثبت رزرو اولیه به مقدار 2
+        // ثبت رزرو اولیه به مقدار 2
         var firstRequest = new
         {
             CustomerId = customerId,
@@ -344,17 +319,17 @@ public class ConcurrentReservationTests
         var reservationId =
             firstJson.RootElement.GetProperty("id").GetInt32();
 
-        // 2. تغییر زمان انقضا به گذشته
+        // تغییر زمان انقضا به گذشته
         await using (var db = new StockHoldDbContext(options))
         {
             await db.Database.ExecuteSqlInterpolatedAsync($"""
-            UPDATE dbo.Reservations
-            SET ExpiresAt = DATEADD(MINUTE, -1, SYSUTCDATETIME())
-            WHERE Id = {reservationId};
-            """);
+                UPDATE dbo.Reservations
+                SET ExpiresAt = DATEADD(MINUTE, -1, SYSUTCDATETIME())
+                WHERE Id = {reservationId};
+                """);
         }
 
-        // 3. اجرای API انقضا
+        // اجرای API انقضا
         var expireResponse = await client.PostAsync(
             "/api/Reservations/expire",
             null);
@@ -374,7 +349,7 @@ public class ConcurrentReservationTests
 
         Assert.Equal(1, expiredCount);
 
-        // 4. بررسی اینکه رزرو قبلی Expired شده است
+        // بررسی اینکه رزرو قبلی Expired شده است
         await using var verificationDb =
             new StockHoldDbContext(options);
 
@@ -384,7 +359,7 @@ public class ConcurrentReservationTests
 
         Assert.Equal("Expired", expiredReservation.Status.ToString());
 
-        // 5. تلاش برای رزرو کل موجودی کالا
+        // تلاش برای رزرو کل موجودی کالا
         // چون رزرو قبلی منقضی شده، باید 5 واحد قابل رزرو باشد.
         var secondRequest = new
         {
@@ -407,11 +382,12 @@ public class ConcurrentReservationTests
             $"Status: {secondResponse.StatusCode}\n" +
             $"Body: {secondResponseBody}");
     }
+
     [Fact]
     public async Task Normal_customer_should_be_allowed_to_reserve_3_units()
     {
         await AssertReservationLimitAsync(
-            customerType: "Normal",
+            customerType: NormalCustomerType,
             requestedQuantity: 3,
             shouldSucceed: true);
     }
@@ -420,7 +396,7 @@ public class ConcurrentReservationTests
     public async Task Normal_customer_should_not_be_allowed_to_reserve_4_units()
     {
         await AssertReservationLimitAsync(
-            customerType: "Normal",
+            customerType: NormalCustomerType,
             requestedQuantity: 4,
             shouldSucceed: false);
     }
@@ -429,7 +405,7 @@ public class ConcurrentReservationTests
     public async Task Special_customer_should_be_allowed_to_reserve_10_units()
     {
         await AssertReservationLimitAsync(
-            customerType: "Special",
+            customerType: SpecialCustomerType,
             requestedQuantity: 10,
             shouldSucceed: true);
     }
@@ -438,13 +414,13 @@ public class ConcurrentReservationTests
     public async Task Special_customer_should_not_be_allowed_to_reserve_11_units()
     {
         await AssertReservationLimitAsync(
-            customerType: "Special",
+            customerType: SpecialCustomerType,
             requestedQuantity: 11,
             shouldSucceed: false);
     }
 
     private async Task AssertReservationLimitAsync(
-        string customerType,
+        int customerType,
         int requestedQuantity,
         bool shouldSucceed)
     {
@@ -457,37 +433,25 @@ public class ConcurrentReservationTests
 
         await using (var db = new StockHoldDbContext(options))
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
 
             await db.Database.ExecuteSqlRawAsync("""
-            DELETE FROM dbo.Reservations;
-            DELETE FROM dbo.Customers;
-            DELETE FROM dbo.Products;
+                DELETE FROM dbo.Reservations;
+                DELETE FROM dbo.Customers;
+                DELETE FROM dbo.Products;
 
-            DBCC CHECKIDENT ('dbo.Reservations', RESEED, 0);
-            DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
-            DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Reservations', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
 
-            IF NOT EXISTS
-            (
-                SELECT 1
-                FROM sys.indexes
-                WHERE name = N'UX_Reservations_Customer_IdempotencyKey'
-                  AND object_id = OBJECT_ID(N'dbo.Reservations')
-            )
-            BEGIN
-                CREATE UNIQUE INDEX UX_Reservations_Customer_IdempotencyKey
-                ON dbo.Reservations (CustomerId, IdempotencyKey);
-            END;
-
-            INSERT INTO dbo.Products (Name, Quantity)
-            VALUES (N'Customer Limit Test Product', 20);
-            """);
+                INSERT INTO dbo.Products (Name, Quantity)
+                VALUES (N'Customer Limit Test Product', 20);
+                """);
 
             await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO dbo.Customers (Name, CustomerType)
-            VALUES (N'Customer Limit Test Customer', {customerType});
-            """);
+                INSERT INTO dbo.Customers (Name, CustomerType)
+                VALUES (N'Customer Limit Test Customer', {customerType});
+                """);
 
             productId = await db.Products
                 .Where(p => p.Name == "Customer Limit Test Product")
@@ -559,17 +523,17 @@ public class ConcurrentReservationTests
 
         await using (var db = new StockHoldDbContext(options))
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
 
             await db.Database.ExecuteSqlRawAsync("""
-            DELETE FROM dbo.Reservations;
-            DELETE FROM dbo.Customers;
-            DELETE FROM dbo.Products;
+                DELETE FROM dbo.Reservations;
+                DELETE FROM dbo.Customers;
+                DELETE FROM dbo.Products;
 
-            DBCC CHECKIDENT ('dbo.Reservations', RESEED, 0);
-            DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
-            DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
-            """);
+                DBCC CHECKIDENT ('dbo.Reservations', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Customers', RESEED, 0);
+                DBCC CHECKIDENT ('dbo.Products', RESEED, 0);
+                """);
         }
 
         using var factory = new StockHoldApiFactory(ConnectionString);
@@ -615,5 +579,4 @@ public class ConcurrentReservationTests
         Assert.Equal("Unit Test Laptop", product.Name);
         Assert.Equal(20, product.Quantity);
     }
-
 }
